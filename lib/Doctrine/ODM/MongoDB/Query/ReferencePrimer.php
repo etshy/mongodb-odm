@@ -40,7 +40,7 @@ use function sprintf;
  *
  * @internal
  */
-class ReferencePrimer
+final class ReferencePrimer
 {
     /**
      * The default primer Closure.
@@ -85,7 +85,6 @@ class ReferencePrimer
             $iterator->toArray();
         };
     }
-
 
     /**
      * Prime references within a mapped field of one or more documents.

@@ -10,7 +10,7 @@ use Doctrine\ODM\MongoDB\PersistentCollection\PersistentCollectionInterface;
 /**
  * Class that holds arguments for postCollectionLoad event.
  */
-class PostCollectionLoadEventArgs extends ManagerEventArgs
+final class PostCollectionLoadEventArgs extends ManagerEventArgs
 {
     /** @var PersistentCollectionInterface */
     private $collection;

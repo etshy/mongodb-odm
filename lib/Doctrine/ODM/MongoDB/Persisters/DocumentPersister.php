@@ -65,7 +65,7 @@ use function strtolower;
  *
  * @internal
  */
-class DocumentPersister
+final class DocumentPersister
 {
     /** @var PersistenceBuilder */
     private $pb;
@@ -79,7 +79,7 @@ class DocumentPersister
     /** @var ClassMetadata */
     private $class;
 
-    /** @var Collection */
+    /** @var Collection|null */
     private $collection;
 
     /** @var Bucket|null */
@@ -122,8 +122,13 @@ class DocumentPersister
         $this->uow             = $uow;
         $this->hydratorFactory = $hydratorFactory;
         $this->class           = $class;
-        $this->collection      = $dm->getDocumentCollection($class->name);
         $this->cp              = $this->uow->getCollectionPersister();
+
+        if ($class->isEmbeddedDocument || $class->isQueryResultDocument) {
+            return;
+        }
+
+        $this->collection = $dm->getDocumentCollection($class->name);
 
         if (! $class->isFile) {
             return;
@@ -220,6 +225,7 @@ class DocumentPersister
 
         if ($inserts) {
             try {
+                assert($this->collection instanceof Collection);
                 $this->collection->insertMany($inserts, $options);
             } catch (DriverException $e) {
                 $this->queuedInserts = [];
@@ -323,7 +329,9 @@ class DocumentPersister
         }
 
         try {
+            assert($this->collection instanceof Collection);
             $this->collection->updateOne($criteria, $data, $options);
+
             return;
         } catch (WriteException $e) {
             if (empty($retry) || strpos($e->getMessage(), 'Mod on _id not allowed') === false) {
@@ -331,6 +339,7 @@ class DocumentPersister
             }
         }
 
+        assert($this->collection instanceof Collection);
         $this->collection->updateOne($criteria, ['$set' => new stdClass()], $options);
     }
 
@@ -386,11 +395,14 @@ class DocumentPersister
 
             $options = $this->getWriteOptions($options);
 
+            assert($this->collection instanceof Collection);
             $result = $this->collection->updateOne($query, $update, $options);
 
             if (($this->class->isVersioned || $this->class->isLockable) && $result->getModifiedCount() !== 1) {
                 throw LockException::lockFailed($document);
-            } elseif ($this->class->isVersioned) {
+            }
+
+            if ($this->class->isVersioned) {
                 $this->class->reflFields[$this->class->versionField]->setValue($document, $nextVersion);
             }
         }
@@ -422,6 +434,7 @@ class DocumentPersister
 
         $options = $this->getWriteOptions($options);
 
+        assert($this->collection instanceof Collection);
         $result = $this->collection->deleteOne($query, $options);
 
         if (($this->class->isVersioned || $this->class->isLockable) && ! $result->getDeletedCount()) {
@@ -434,6 +447,7 @@ class DocumentPersister
      */
     public function refresh(object $document) : void
     {
+        assert($this->collection instanceof Collection);
         $query = $this->getQueryForDocument($document);
         $data  = $this->collection->findOne($query);
         if ($data === null) {
@@ -471,6 +485,7 @@ class DocumentPersister
         if ($sort !== null) {
             $options['sort'] = $this->prepareSort($sort);
         }
+        assert($this->collection instanceof Collection);
         $result = $this->collection->findOne($criteria, $options);
         $result = $result !== null ? (array) $result : null;
 
@@ -510,7 +525,9 @@ class DocumentPersister
             $options['skip'] = $skip;
         }
 
+        assert($this->collection instanceof Collection);
         $baseCursor = $this->collection->find($criteria, $options);
+
         return $this->wrapCursor($baseCursor);
     }
 
@@ -566,6 +583,8 @@ class DocumentPersister
     public function exists(object $document) : bool
     {
         $id = $this->class->getIdentifierObject($document);
+        assert($this->collection instanceof Collection);
+
         return (bool) $this->collection->findOne(['_id' => $id], ['_id']);
     }
 
@@ -577,6 +596,7 @@ class DocumentPersister
         $id          = $this->uow->getDocumentIdentifier($document);
         $criteria    = ['_id' => $this->class->getDatabaseIdentifierValue($id)];
         $lockMapping = $this->class->fieldMappings[$this->class->lockField];
+        assert($this->collection instanceof Collection);
         $this->collection->updateOne($criteria, ['$set' => [$lockMapping['name'] => $lockMode]]);
         $this->class->reflFields[$this->class->lockField]->setValue($document, $lockMode);
     }
@@ -589,6 +609,7 @@ class DocumentPersister
         $id          = $this->uow->getDocumentIdentifier($document);
         $criteria    = ['_id' => $this->class->getDatabaseIdentifierValue($id)];
         $lockMapping = $this->class->fieldMappings[$this->class->lockField];
+        assert($this->collection instanceof Collection);
         $this->collection->updateOne($criteria, ['$unset' => [$lockMapping['name'] => true]]);
         $this->class->reflFields[$this->class->lockField]->setValue($document, null);
     }
@@ -861,7 +882,6 @@ class DocumentPersister
         switch (strtolower((string) $sort)) {
             case 'desc':
                 return -1;
-
             case 'asc':
                 return 1;
         }
@@ -902,22 +922,31 @@ class DocumentPersister
     /**
      * Adds discriminator criteria to an already-prepared query.
      *
+     * If the class we're querying has a discriminator field set, we add all
+     * possible discriminator values to the query. The list of possible
+     * discriminator values is based on the discriminatorValue of the class
+     * itself as well as those of all its subclasses.
+     *
      * This method should be used once for query criteria and not be used for
      * nested expressions. It should be called before
      * {@link DocumentPerister::addFilterToPreparedQuery()}.
      */
     public function addDiscriminatorToPreparedQuery(array $preparedQuery) : array
     {
-        /* If the class has a discriminator field, which is not already in the
-         * criteria, inject it now. The field/values need no preparation.
-         */
-        if ($this->class->hasDiscriminator() && ! isset($preparedQuery[$this->class->discriminatorField])) {
-            $discriminatorValues = $this->getClassDiscriminatorValues($this->class);
-            if (count($discriminatorValues) === 1) {
-                $preparedQuery[$this->class->discriminatorField] = $discriminatorValues[0];
-            } else {
-                $preparedQuery[$this->class->discriminatorField] = ['$in' => $discriminatorValues];
-            }
+        if (isset($preparedQuery[$this->class->discriminatorField]) || $this->class->discriminatorField === null) {
+            return $preparedQuery;
+        }
+
+        $discriminatorValues = $this->getClassDiscriminatorValues($this->class);
+
+        if ($discriminatorValues === []) {
+            return $preparedQuery;
+        }
+
+        if (count($discriminatorValues) === 1) {
+            $preparedQuery[$this->class->discriminatorField] = $discriminatorValues[0];
+        } else {
+            $preparedQuery[$this->class->discriminatorField] = ['$in' => $discriminatorValues];
         }
 
         return $preparedQuery;
@@ -957,7 +986,7 @@ class DocumentPersister
 
         foreach ($query as $key => $value) {
             // Recursively prepare logical query clauses
-            if (in_array($key, ['$and', '$or', '$nor']) && is_array($value)) {
+            if (in_array($key, ['$and', '$or', '$nor'], true) && is_array($value)) {
                 foreach ($value as $k2 => $v2) {
                     $preparedQuery[$key][$k2] = $this->prepareQueryOrNewObj($v2, $isNewObj);
                 }
@@ -1265,11 +1294,16 @@ class DocumentPersister
     }
 
     /**
-     * Gets the array of discriminator values for the given ClassMetadata
+     * Returns the list of discriminator values for the given ClassMetadata
      */
     private function getClassDiscriminatorValues(ClassMetadata $metadata) : array
     {
-        $discriminatorValues = [$metadata->discriminatorValue];
+        $discriminatorValues = [];
+
+        if ($metadata->discriminatorValue !== null) {
+            $discriminatorValues[] = $metadata->discriminatorValue;
+        }
+
         foreach ($metadata->subClasses as $className) {
             $key = array_search($className, $metadata->discriminatorMap);
             if (! $key) {
@@ -1352,6 +1386,7 @@ class DocumentPersister
         $id = $this->class->getDatabaseIdentifierValue($id);
 
         $shardKeyQueryPart = $this->getShardKeyQuery($document);
+
         return array_merge(['_id' => $id], $shardKeyQueryPart);
     }
 

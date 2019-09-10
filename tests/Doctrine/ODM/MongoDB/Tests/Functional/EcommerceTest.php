@@ -13,7 +13,7 @@ use Documents\Ecommerce\StockItem;
 
 class EcommerceTest extends BaseTest
 {
-    public function setUp()
+    public function setUp() : void
     {
         parent::setUp();
 
@@ -90,6 +90,7 @@ class EcommerceTest extends BaseTest
             ->getQuery()
             ->execute();
         $products->valid() ?: $products->next();
+
         return $products->current();
     }
 }

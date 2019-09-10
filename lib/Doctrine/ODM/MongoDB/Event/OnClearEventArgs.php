@@ -11,12 +11,13 @@ use function assert;
 /**
  * Provides event arguments for the onClear event.
  */
-class OnClearEventArgs extends BaseOnClearEventArgs
+final class OnClearEventArgs extends BaseOnClearEventArgs
 {
     public function getDocumentManager() : DocumentManager
     {
         $dm = $this->getObjectManager();
         assert($dm instanceof DocumentManager);
+
         return $dm;
     }
 

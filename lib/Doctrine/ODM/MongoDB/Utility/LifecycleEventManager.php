@@ -19,7 +19,7 @@ use function get_class;
 /**
  * @internal
  */
-class LifecycleEventManager
+final class LifecycleEventManager
 {
     /** @var DocumentManager */
     private $dm;

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Doctrine\ODM\MongoDB\Tests\Aggregation;
 
 use DateTimeImmutable;
+use Doctrine\ODM\MongoDB\Aggregation\Stage;
 use Doctrine\ODM\MongoDB\Iterator\Iterator;
 use Doctrine\ODM\MongoDB\Tests\BaseTest;
 use Documents\Article;
@@ -12,8 +13,10 @@ use Documents\BlogPost;
 use Documents\BlogTagAggregation;
 use Documents\CmsComment;
 use Documents\GuestServer;
+use Documents\Project;
 use Documents\Tag;
 use MongoDB\BSON\UTCDateTime;
+use function array_keys;
 
 class BuilderTest extends BaseTest
 {
@@ -102,6 +105,7 @@ class BuilderTest extends BaseTest
             ['$sort' => ['numOrders' => -1, 'avgAmount' => 1]],
             ['$limit' => 5],
             ['$skip' => 2],
+            ['$foo' => 'bar'],
             ['$out' => 'collectionName'],
         ];
 
@@ -160,6 +164,7 @@ class BuilderTest extends BaseTest
             ->sort(['numOrders' => 'desc', 'avgAmount' => 'asc']) // Multiple subsequent sorts are combined into a single stage
             ->limit(5)
             ->skip(2)
+            ->addStage(new TestStage($builder))
             ->out('collectionName');
 
         $this->assertEquals($expectedPipeline, $builder->getPipeline());
@@ -228,7 +233,11 @@ class BuilderTest extends BaseTest
             ],
             [
                 '$replaceRoot' => [
-                    'isToday' => ['$eq' => ['$createdAt', new UTCDateTime((int) $dateTime->format('Uv'))]],
+                    'newRoot' => (object) [
+                        'isToday' => [
+                            '$eq' => ['$createdAt', new UTCDateTime((int) $dateTime->format('Uv'))],
+                        ],
+                    ],
                 ],
             ],
         ];
@@ -260,7 +269,7 @@ class BuilderTest extends BaseTest
             [
                 '$sort' => ['ip' => 1],
             ],
-            ['$replaceRoot' => '$ip'],
+            ['$replaceRoot' => ['newRoot' => '$ip']],
         ];
 
         $this->assertEquals($expectedPipeline, $builder->getPipeline());
@@ -340,6 +349,15 @@ class BuilderTest extends BaseTest
         $this->assertCount(0, $result);
     }
 
+    public function testBuilderWithIndexStatsStageDoesNotApplyFilters()
+    {
+        $builder = $this->dm
+            ->createAggregationBuilder(Project::class)
+            ->indexStats();
+
+        $this->assertSame('$indexStats', array_keys($builder->getPipeline()[0])[0]);
+    }
+
     private function insertTestData()
     {
         $baseballTag = new Tag('baseball');
@@ -368,5 +386,13 @@ class BuilderTest extends BaseTest
 
         $this->dm->flush();
         $this->dm->clear();
+    }
+}
+
+class TestStage extends Stage
+{
+    public function getExpression() : array
+    {
+        return ['$foo' => 'bar'];
     }
 }

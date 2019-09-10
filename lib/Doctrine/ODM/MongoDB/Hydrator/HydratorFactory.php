@@ -36,7 +36,7 @@ use function uniqid;
  * The HydratorFactory class is responsible for instantiating a correct hydrator
  * type based on document's ClassMetadata
  */
-class HydratorFactory
+final class HydratorFactory
 {
     /**
      * The DocumentManager this factory is bound to.
@@ -152,6 +152,7 @@ class HydratorFactory
             }
         }
         $this->hydrators[$className] = new $fqn($this->dm, $this->unitOfWork, $class);
+
         return $this->hydrators[$className];
     }
 

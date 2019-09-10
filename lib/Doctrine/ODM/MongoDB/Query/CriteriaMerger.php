@@ -15,7 +15,7 @@ use function count;
  * into a query. Each criteria array will be joined with "$and" to avoid cases
  * where criteria might be inadvertently overridden with array_merge().
  */
-class CriteriaMerger
+final class CriteriaMerger
 {
     /**
      * Combines any number of criteria arrays as clauses of an "$and" query.
@@ -31,10 +31,8 @@ class CriteriaMerger
         switch (count($nonEmptyCriterias)) {
             case 0:
                 return [];
-
             case 1:
                 return $nonEmptyCriterias[0];
-
             default:
                 return ['$and' => $nonEmptyCriterias];
         }

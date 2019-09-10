@@ -14,7 +14,7 @@ use Documents\User;
 
 class LookupTest extends BaseTest
 {
-    public function setUp()
+    public function setUp() : void
     {
         parent::setUp();
         $this->requireMongoDB32('$lookup tests require at least MongoDB 3.2.0');
@@ -192,7 +192,7 @@ class LookupTest extends BaseTest
 
     public function testLookupStageReferenceManyWithoutUnwindMongoDB32()
     {
-        $this->skipOnMongoDB34('$lookup tests without unwind will not work on MongoDB 3.4.0');
+        $this->skipOnMongoDB34('$lookup tests without unwind will not work on MongoDB 3.4.0+');
 
         $builder = $this->dm->createAggregationBuilder(SimpleReferenceUser::class);
         $builder

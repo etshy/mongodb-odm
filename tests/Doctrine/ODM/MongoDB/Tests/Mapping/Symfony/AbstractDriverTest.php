@@ -64,13 +64,13 @@ abstract class AbstractDriverTest extends TestCase
         $driver->getLocator()->findMappingFile('MyOtherNamespace\MySubnamespace\Document\Foo');
     }
 
-    protected function setUp()
+    protected function setUp() : void
     {
         $this->dir = sys_get_temp_dir() . '/abstract_driver_test';
         @mkdir($this->dir, 0775, true);
     }
 
-    protected function tearDown()
+    protected function tearDown() : void
     {
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($this->dir), RecursiveIteratorIterator::CHILD_FIRST);
 
@@ -86,5 +86,6 @@ abstract class AbstractDriverTest extends TestCase
     }
 
     abstract protected function getFileExtension();
+
     abstract protected function getDriver(array $paths = []);
 }

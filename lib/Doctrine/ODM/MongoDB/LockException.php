@@ -4,10 +4,7 @@ declare(strict_types=1);
 
 namespace Doctrine\ODM\MongoDB;
 
-/**
- * LockException
- */
-class LockException extends MongoDBException
+final class LockException extends MongoDBException
 {
     /** @var object|null */
     private $document;

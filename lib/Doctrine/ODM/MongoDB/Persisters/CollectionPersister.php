@@ -41,7 +41,7 @@ use function strpos;
  *
  * @internal
  */
-class CollectionPersister
+final class CollectionPersister
 {
     /** @var DocumentManager */
     private $dm;
@@ -423,6 +423,7 @@ class CollectionPersister
         if ($propertyPath) {
             $path = $propertyPath . '.' . $path;
         }
+
         return [$path, $parent];
     }
 

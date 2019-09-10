@@ -9,7 +9,7 @@ use Doctrine\ODM\MongoDB\DocumentManager;
 /**
  * Class that holds event arguments for a preLoad event.
  */
-class PreLoadEventArgs extends LifecycleEventArgs
+final class PreLoadEventArgs extends LifecycleEventArgs
 {
     /** @var array */
     private $data;

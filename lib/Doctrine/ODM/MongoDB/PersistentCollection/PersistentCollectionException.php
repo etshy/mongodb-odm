@@ -11,7 +11,7 @@ use function sprintf;
 /**
  * MongoDB ODM PersistentCollection Exception.
  */
-class PersistentCollectionException extends MongoDBException
+final class PersistentCollectionException extends MongoDBException
 {
     public static function directoryNotWritable() : self
     {

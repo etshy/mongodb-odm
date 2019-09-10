@@ -15,7 +15,7 @@ use function array_values;
 /**
  * Collection class for all the query filters.
  */
-class FilterCollection
+final class FilterCollection
 {
     /**
      * The used Configuration.
@@ -114,6 +114,7 @@ class FilterCollection
         if (! $this->isEnabled($name)) {
             throw new InvalidArgumentException("Filter '" . $name . "' is not enabled.");
         }
+
         return $this->enabledFilters[$name];
     }
 

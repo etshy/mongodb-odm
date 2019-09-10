@@ -11,12 +11,13 @@ use function assert;
 /**
  * Class that holds event arguments for a loadMetadata event.
  */
-class LoadClassMetadataEventArgs extends BaseLoadClassMetadataEventArgs
+final class LoadClassMetadataEventArgs extends BaseLoadClassMetadataEventArgs
 {
     public function getDocumentManager() : DocumentManager
     {
         $dm = $this->getObjectManager();
         assert($dm instanceof DocumentManager);
+
         return $dm;
     }
 }

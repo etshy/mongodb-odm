@@ -9,7 +9,7 @@ use Doctrine\ODM\MongoDB\MongoDBException;
 /**
  * MongoDB ODM Hydrator Exception
  */
-class HydratorException extends MongoDBException
+final class HydratorException extends MongoDBException
 {
     public static function hydratorDirectoryNotWritable() : self
     {

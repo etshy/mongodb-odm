@@ -40,8 +40,12 @@ class ReplaceRoot extends Operator
      */
     public function getExpression() : array
     {
+        $expression = $this->expression !== null ? $this->convertExpression($this->expression) : $this->expr->getExpression();
+
         return [
-            '$replaceRoot' => $this->expression !== null ? $this->convertExpression($this->expression) : $this->expr->getExpression(),
+            '$replaceRoot' => [
+                'newRoot' => is_array($expression) ? (object) $expression : $expression,
+            ],
         ];
     }
 
@@ -49,7 +53,9 @@ class ReplaceRoot extends Operator
     {
         if (is_array($expression)) {
             return array_map([$this, 'convertExpression'], $expression);
-        } elseif (is_string($expression) && substr($expression, 0, 1) === '$') {
+        }
+
+        if (is_string($expression) && substr($expression, 0, 1) === '$') {
             return '$' . $this->getDocumentPersister()->prepareFieldName(substr($expression, 1));
         }
 

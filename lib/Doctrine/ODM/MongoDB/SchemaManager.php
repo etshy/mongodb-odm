@@ -11,6 +11,7 @@ use MongoDB\Driver\Exception\RuntimeException;
 use MongoDB\Driver\Exception\ServerException;
 use MongoDB\Driver\WriteConcern;
 use MongoDB\Model\IndexInfo;
+use function array_diff_key;
 use function array_filter;
 use function array_merge;
 use function array_unique;
@@ -20,13 +21,23 @@ use function iterator_to_array;
 use function ksort;
 use function sprintf;
 
-class SchemaManager
+final class SchemaManager
 {
     private const GRIDFS_FILE_COLLECTION_INDEX = ['files_id' => 1, 'n' => 1];
 
     private const GRIDFS_CHUNKS_COLLECTION_INDEX = ['filename' => 1, 'uploadDate' => 1];
 
     private const CODE_SHARDING_ALREADY_INITIALIZED = 23;
+
+    private const ALLOWED_MISSING_INDEX_OPTIONS = [
+        'partialFilterExpression',
+        'sparse',
+        'unique',
+        'weights',
+        'default_language',
+        'language_override',
+        'textIndexVersion',
+    ];
 
     /** @var DocumentManager */
     protected $dm;
@@ -44,7 +55,7 @@ class SchemaManager
      * Ensure indexes are created for all documents that can be loaded with the
      * metadata factory.
      */
-    public function ensureIndexes(?int $maxTimeMs = null, ?WriteConcern $writeConcern = null) : void
+    public function ensureIndexes(?int $maxTimeMs = null, ?WriteConcern $writeConcern = null, bool $background = false) : void
     {
         foreach ($this->metadataFactory->getAllMetadata() as $class) {
             assert($class instanceof ClassMetadata);
@@ -52,7 +63,7 @@ class SchemaManager
                 continue;
             }
 
-            $this->ensureDocumentIndexes($class->name, $maxTimeMs, $writeConcern);
+            $this->ensureDocumentIndexes($class->name, $maxTimeMs, $writeConcern, $background);
         }
     }
 
@@ -127,6 +138,7 @@ class SchemaManager
     public function getDocumentIndexes(string $documentName) : array
     {
         $visited = [];
+
         return $this->doGetDocumentIndexes($documentName, $visited);
     }
 
@@ -226,7 +238,7 @@ class SchemaManager
      *
      * @throws InvalidArgumentException
      */
-    public function ensureDocumentIndexes(string $documentName, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null) : void
+    public function ensureDocumentIndexes(string $documentName, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null, bool $background = false) : void
     {
         $class = $this->dm->getClassMetadata($documentName);
         if ($class->isMappedSuperclass || $class->isEmbeddedDocument || $class->isQueryResultDocument) {
@@ -234,7 +246,7 @@ class SchemaManager
         }
 
         if ($class->isFile) {
-            $this->ensureGridFSIndexes($class, $maxTimeMs, $writeConcern);
+            $this->ensureGridFSIndexes($class, $maxTimeMs, $writeConcern, $background);
         }
 
         $indexes = $this->getDocumentIndexes($documentName);
@@ -244,7 +256,7 @@ class SchemaManager
 
         $collection = $this->dm->getDocumentCollection($class->name);
         foreach ($indexes as $index) {
-            $collection->createIndex($index['keys'], $this->getWriteOptions($maxTimeMs, $writeConcern, $index['options']));
+            $collection->createIndex($index['keys'], $this->getWriteOptions($maxTimeMs, $writeConcern, $index['options'] + ['background' => $background]));
         }
     }
 
@@ -395,81 +407,16 @@ class SchemaManager
         $this->dm->getDocumentDatabase($documentName)->drop($this->getWriteOptions($maxTimeMs, $writeConcern));
     }
 
-    /**
-     * Determine if an index returned by MongoCollection::getIndexInfo() can be
-     * considered equivalent to an index in class metadata.
-     *
-     * Indexes are considered different if:
-     *
-     *   (a) Key/direction pairs differ or are not in the same order
-     *   (b) Sparse or unique options differ
-     *   (c) Geospatial options differ (bits, max, min)
-     *   (d) The partialFilterExpression differs
-     *
-     * The background option is only relevant to index creation and is not
-     * considered.
-     *
-     * @param array|IndexInfo $mongoIndex Mongo index data.
-     */
-    public function isMongoIndexEquivalentToDocumentIndex($mongoIndex, array $documentIndex) : bool
+    public function isMongoIndexEquivalentToDocumentIndex(IndexInfo $mongoIndex, array $documentIndex) : bool
     {
-        $documentIndexOptions = $documentIndex['options'];
-
-        if (! $this->isEquivalentIndexKeys($mongoIndex, $documentIndex)) {
-            return false;
-        }
-
-        if (empty($mongoIndex['sparse']) xor empty($documentIndexOptions['sparse'])) {
-            return false;
-        }
-
-        if (empty($mongoIndex['unique']) xor empty($documentIndexOptions['unique'])) {
-            return false;
-        }
-
-        foreach (['bits', 'max', 'min'] as $option) {
-            if (isset($mongoIndex[$option]) xor isset($documentIndexOptions[$option])) {
-                return false;
-            }
-
-            if (isset($mongoIndex[$option], $documentIndexOptions[$option]) &&
-                $mongoIndex[$option] !== $documentIndexOptions[$option]) {
-                return false;
-            }
-        }
-
-        if (empty($mongoIndex['partialFilterExpression']) xor empty($documentIndexOptions['partialFilterExpression'])) {
-            return false;
-        }
-
-        if (isset($mongoIndex['partialFilterExpression'], $documentIndexOptions['partialFilterExpression']) &&
-            $mongoIndex['partialFilterExpression'] !== $documentIndexOptions['partialFilterExpression']) {
-            return false;
-        }
-
-        if (isset($mongoIndex['weights']) && ! $this->isEquivalentTextIndexWeights($mongoIndex, $documentIndex)) {
-            return false;
-        }
-
-        foreach (['default_language', 'language_override', 'textIndexVersion'] as $option) {
-            /* Text indexes will always report defaults for these options, so
-             * only compare if we have explicit values in the document index. */
-            if (isset($mongoIndex[$option], $documentIndexOptions[$option]) &&
-                $mongoIndex[$option] !== $documentIndexOptions[$option]) {
-                return false;
-            }
-        }
-
-        return true;
+        return $this->isEquivalentIndexKeys($mongoIndex, $documentIndex) && $this->isEquivalentIndexOptions($mongoIndex, $documentIndex);
     }
 
     /**
      * Determine if the keys for a MongoDB index can be considered equivalent to
      * those for an index in class metadata.
-     *
-     * @param array|IndexInfo $mongoIndex Mongo index data.
      */
-    private function isEquivalentIndexKeys($mongoIndex, array $documentIndex) : bool
+    private function isEquivalentIndexKeys(IndexInfo $mongoIndex, array $documentIndex) : bool
     {
         $mongoIndexKeys    = $mongoIndex['key'];
         $documentIndexKeys = $documentIndex['keys'];
@@ -490,17 +437,95 @@ class SchemaManager
         /* Avoid a strict equality check here. The numeric type returned by
          * MongoDB may differ from the document index without implying that the
          * indexes themselves are inequivalent. */
-        // phpcs:disable SlevomatCodingStandard.ControlStructures.DisallowEqualOperators.DisallowedEqualOperator
+        // phpcs:disable SlevomatCodingStandard.Operators.DisallowEqualOperators.DisallowedEqualOperator
         return $mongoIndexKeys == $documentIndexKeys;
+    }
+
+    /**
+     * Determine if an index returned by MongoCollection::getIndexInfo() can be
+     * considered equivalent to an index in class metadata based on options.
+     *
+     * Indexes are considered different if:
+     *
+     *   (a) Key/direction pairs differ or are not in the same order
+     *   (b) Sparse or unique options differ
+     *   (c) Geospatial options differ (bits, max, min)
+     *   (d) The partialFilterExpression differs
+     *
+     * The background option is only relevant to index creation and is not
+     * considered.
+     */
+    private function isEquivalentIndexOptions(IndexInfo $mongoIndex, array $documentIndex) : bool
+    {
+        $mongoIndexOptions = $mongoIndex->__debugInfo();
+        unset($mongoIndexOptions['v'], $mongoIndexOptions['ns'], $mongoIndexOptions['key']);
+
+        $documentIndexOptions = $documentIndex['options'];
+
+        if ($this->indexOptionsAreMissing($mongoIndexOptions, $documentIndexOptions)) {
+            return false;
+        }
+
+        if (empty($mongoIndexOptions['sparse']) xor empty($documentIndexOptions['sparse'])) {
+            return false;
+        }
+
+        if (empty($mongoIndexOptions['unique']) xor empty($documentIndexOptions['unique'])) {
+            return false;
+        }
+
+        foreach (['bits', 'max', 'min'] as $option) {
+            if (isset($mongoIndexOptions[$option], $documentIndexOptions[$option]) &&
+                $mongoIndexOptions[$option] !== $documentIndexOptions[$option]) {
+                return false;
+            }
+        }
+
+        if (empty($mongoIndexOptions['partialFilterExpression']) xor empty($documentIndexOptions['partialFilterExpression'])) {
+            return false;
+        }
+
+        if (isset($mongoIndexOptions['partialFilterExpression'], $documentIndexOptions['partialFilterExpression']) &&
+            $mongoIndexOptions['partialFilterExpression'] !== $documentIndexOptions['partialFilterExpression']) {
+            return false;
+        }
+
+        if (isset($mongoIndexOptions['weights']) && ! $this->isEquivalentTextIndexWeights($mongoIndex, $documentIndex)) {
+            return false;
+        }
+
+        foreach (['default_language', 'language_override', 'textIndexVersion'] as $option) {
+            /* Text indexes will always report defaults for these options, so
+             * only compare if we have explicit values in the document index. */
+            if (isset($mongoIndexOptions[$option], $documentIndexOptions[$option]) &&
+                $mongoIndexOptions[$option] !== $documentIndexOptions[$option]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Checks if any index options are missing.
+     *
+     * Options added to the ALLOWED_MISSING_INDEX_OPTIONS constant are ignored
+     * and are expected to be checked later
+     */
+    private function indexOptionsAreMissing(array $mongoIndexOptions, array $documentIndexOptions) : bool
+    {
+        foreach (self::ALLOWED_MISSING_INDEX_OPTIONS as $option) {
+            unset($mongoIndexOptions[$option], $documentIndexOptions[$option]);
+        }
+
+        return array_diff_key($mongoIndexOptions, $documentIndexOptions) !== [] || array_diff_key($documentIndexOptions, $mongoIndexOptions) !== [];
     }
 
     /**
      * Determine if the text index weights for a MongoDB index can be considered
      * equivalent to those for an index in class metadata.
-     *
-     * @param array|IndexInfo $mongoIndex Mongo index data.
      */
-    private function isEquivalentTextIndexWeights($mongoIndex, array $documentIndex) : bool
+    private function isEquivalentTextIndexWeights(IndexInfo $mongoIndex, array $documentIndex) : bool
     {
         $mongoIndexWeights    = $mongoIndex['weights'];
         $documentIndexWeights = $documentIndex['options']['weights'] ?? [];
@@ -522,7 +547,7 @@ class SchemaManager
         /* Avoid a strict equality check here. The numeric type returned by
          * MongoDB may differ from the document index without implying that the
          * indexes themselves are inequivalent. */
-        // phpcs:disable SlevomatCodingStandard.ControlStructures.DisallowEqualOperators.DisallowedEqualOperator
+        // phpcs:disable SlevomatCodingStandard.Operators.DisallowEqualOperators.DisallowedEqualOperator
         return $mongoIndexWeights == $documentIndexWeights;
     }
 
@@ -625,13 +650,13 @@ class SchemaManager
         )->toArray()[0];
     }
 
-    private function ensureGridFSIndexes(ClassMetadata $class, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null) : void
+    private function ensureGridFSIndexes(ClassMetadata $class, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null, bool $background = false) : void
     {
-        $this->ensureChunksIndex($class, $maxTimeMs, $writeConcern);
-        $this->ensureFilesIndex($class, $maxTimeMs, $writeConcern);
+        $this->ensureChunksIndex($class, $maxTimeMs, $writeConcern, $background);
+        $this->ensureFilesIndex($class, $maxTimeMs, $writeConcern, $background);
     }
 
-    private function ensureChunksIndex(ClassMetadata $class, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null) : void
+    private function ensureChunksIndex(ClassMetadata $class, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null, bool $background = false) : void
     {
         $chunksCollection = $this->dm->getDocumentBucket($class->getName())->getChunksCollection();
         foreach ($chunksCollection->listIndexes() as $index) {
@@ -642,11 +667,11 @@ class SchemaManager
 
         $chunksCollection->createIndex(
             self::GRIDFS_FILE_COLLECTION_INDEX,
-            $this->getWriteOptions($maxTimeMs, $writeConcern, ['unique' => true])
+            $this->getWriteOptions($maxTimeMs, $writeConcern, ['unique' => true, 'background' => $background])
         );
     }
 
-    private function ensureFilesIndex(ClassMetadata $class, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null) : void
+    private function ensureFilesIndex(ClassMetadata $class, ?int $maxTimeMs = null, ?WriteConcern $writeConcern = null, bool $background = false) : void
     {
         $filesCollection = $this->dm->getDocumentCollection($class->getName());
         foreach ($filesCollection->listIndexes() as $index) {
@@ -655,7 +680,7 @@ class SchemaManager
             }
         }
 
-        $filesCollection->createIndex(self::GRIDFS_CHUNKS_COLLECTION_INDEX, $this->getWriteOptions($maxTimeMs, $writeConcern));
+        $filesCollection->createIndex(self::GRIDFS_CHUNKS_COLLECTION_INDEX, $this->getWriteOptions($maxTimeMs, $writeConcern, ['background' => $background]));
     }
 
     private function collectionIsSharded(string $documentName) : bool
@@ -669,6 +694,7 @@ class SchemaManager
         }
 
         $stats = $database->command(['collstats' => $class->getCollection()])->toArray()[0];
+
         return (bool) ($stats['sharded'] ?? false);
     }
 

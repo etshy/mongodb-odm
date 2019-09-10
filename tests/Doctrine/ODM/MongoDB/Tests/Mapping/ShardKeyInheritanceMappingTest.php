@@ -13,14 +13,13 @@ class ShardKeyInheritanceMappingTest extends BaseTest
     /** @var ClassMetadataFactory */
     private $factory;
 
-    public function setUp()
+    public function setUp() : void
     {
         parent::setUp();
         $this->factory = new ClassMetadataFactory();
         $this->factory->setDocumentManager($this->dm);
         $this->factory->setConfiguration($this->dm->getConfiguration());
     }
-
 
     public function testShardKeyFromMappedSuperclass()
     {

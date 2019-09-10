@@ -25,7 +25,7 @@ use function strlen;
  *
  * The character set used for ID generation can be explicitly set with the "chars" option (e.g. base36, etc.)
  */
-class AlnumGenerator extends IncrementGenerator
+final class AlnumGenerator extends IncrementGenerator
 {
     /** @var int|null */
     protected $pad = null;

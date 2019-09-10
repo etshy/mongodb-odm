@@ -20,7 +20,7 @@ use function substr;
 /**
  * Generates UUIDs.
  */
-class UuidGenerator extends AbstractIdGenerator
+final class UuidGenerator extends AbstractIdGenerator
 {
     /**
      * A unique environment value to salt each UUID with.
@@ -69,6 +69,7 @@ class UuidGenerator extends AbstractIdGenerator
     public function generate(DocumentManager $dm, object $document)
     {
         $uuid = $this->generateV4();
+
         return $this->generateV5($uuid, $this->salt ?: php_uname('n'));
     }
 

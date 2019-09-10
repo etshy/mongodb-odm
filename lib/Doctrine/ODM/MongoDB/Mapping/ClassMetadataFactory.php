@@ -13,6 +13,7 @@ use Doctrine\ODM\MongoDB\Configuration;
 use Doctrine\ODM\MongoDB\ConfigurationException;
 use Doctrine\ODM\MongoDB\DocumentManager;
 use Doctrine\ODM\MongoDB\Event\LoadClassMetadataEventArgs;
+use Doctrine\ODM\MongoDB\Event\OnClassMetadataNotFoundEventArgs;
 use Doctrine\ODM\MongoDB\Events;
 use Doctrine\ODM\MongoDB\Id\AbstractIdGenerator;
 use Doctrine\ODM\MongoDB\Id\AlnumGenerator;
@@ -33,7 +34,7 @@ use function ucfirst;
  *
  * @internal
  */
-class ClassMetadataFactory extends AbstractClassMetadataFactory
+final class ClassMetadataFactory extends AbstractClassMetadataFactory
 {
     /** @var string */
     protected $cacheSalt = '$MONGODBODMCLASSMETADATA';
@@ -84,6 +85,22 @@ class ClassMetadataFactory extends AbstractClassMetadataFactory
     /**
      * {@inheritDoc}
      */
+    protected function onNotFoundMetadata($className)
+    {
+        if (! $this->evm->hasListeners(Events::onClassMetadataNotFound)) {
+            return null;
+        }
+
+        $eventArgs = new OnClassMetadataNotFoundEventArgs($className, $this->dm);
+
+        $this->evm->dispatchEvent(Events::onClassMetadataNotFound, $eventArgs);
+
+        return $eventArgs->getFoundMetadata();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
     protected function getFqcnFromAlias($namespaceAlias, $simpleClassName) : string
     {
         return $this->config->getDocumentNamespace($namespaceAlias) . '\\' . $simpleClassName;
@@ -117,6 +134,7 @@ class ClassMetadataFactory extends AbstractClassMetadataFactory
     protected function isEntity(ClassMetadataInterface $class) : bool
     {
         assert($class instanceof ClassMetadata);
+
         return ! $class->isMappedSuperclass && ! $class->isEmbeddedDocument && ! $class->isQueryResultDocument;
     }
 
@@ -304,7 +322,6 @@ class ClassMetadataFactory extends AbstractClassMetadataFactory
             $subClass->reflFields[$name] = $field;
         }
     }
-
 
     /**
      * Adds inherited association mappings to the subclass mapping.

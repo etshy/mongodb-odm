@@ -10,7 +10,7 @@ use MongoDB\BSON\ObjectId;
 /**
  * AutoGenerator generates a native ObjectId
  */
-class AutoGenerator extends AbstractIdGenerator
+final class AutoGenerator extends AbstractIdGenerator
 {
     /** @inheritDoc */
     public function generate(DocumentManager $dm, object $document)

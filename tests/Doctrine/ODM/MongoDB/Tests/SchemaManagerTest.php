@@ -6,22 +6,13 @@ namespace Doctrine\ODM\MongoDB\Tests;
 
 use ArrayIterator;
 use Doctrine\Common\EventManager;
-use Doctrine\ODM\MongoDB\Configuration;
+use Doctrine\ODM\MongoDB\DocumentManager;
 use Doctrine\ODM\MongoDB\Mapping\ClassMetadata;
-use Doctrine\ODM\MongoDB\Mapping\ClassMetadataFactory;
-use Doctrine\ODM\MongoDB\Mapping\Driver\AnnotationDriver;
-use Doctrine\ODM\MongoDB\Persisters\DocumentPersister;
-use Doctrine\ODM\MongoDB\Proxy\ClassNameResolver;
 use Doctrine\ODM\MongoDB\SchemaManager;
-use Doctrine\ODM\MongoDB\Tests\Mocks\DocumentManagerMock;
-use Doctrine\ODM\MongoDB\UnitOfWork;
 use Documents\CmsAddress;
 use Documents\CmsArticle;
 use Documents\CmsComment;
-use Documents\CmsGroup;
-use Documents\CmsPhonenumber;
 use Documents\CmsProduct;
-use Documents\CmsUser;
 use Documents\Comment;
 use Documents\File;
 use Documents\Sharded\ShardedOne;
@@ -32,13 +23,14 @@ use MongoDB\Collection;
 use MongoDB\Database;
 use MongoDB\Driver\WriteConcern;
 use MongoDB\GridFS\Bucket;
+use MongoDB\Model\IndexInfo;
 use MongoDB\Model\IndexInfoIteratorIterator;
 use PHPUnit\Framework\Constraint\ArraySubset;
 use PHPUnit\Framework\MockObject\MockObject;
-use PHPUnit\Framework\TestCase;
+use function array_map;
 use function in_array;
 
-class SchemaManagerTest extends TestCase
+class SchemaManagerTest extends BaseTest
 {
     private $indexedClasses = [
         CmsAddress::class,
@@ -51,26 +43,6 @@ class SchemaManagerTest extends TestCase
         ShardedOneWithDifferentKey::class,
     ];
 
-    private $someNonIndexedClasses = [
-        CmsGroup::class,
-        CmsPhonenumber::class,
-        CmsUser::class,
-    ];
-
-    private $someMappedSuperclassAndEmbeddedClasses = [
-        'Documents/BlogTagAggregation',
-        'Documents/CmsContent',
-        'Documents/CmsPage',
-        'Documents/Issue',
-        'Documents/Message',
-        'Documents/Phonenumber',
-        'Documents/Song',
-        'Documents/SubCategory',
-    ];
-
-    /** @var ClassMetadata[] */
-    private $classMetadatas = [];
-
     /** @var Collection[]|MockObject[] */
     private $documentCollections = [];
 
@@ -80,41 +52,46 @@ class SchemaManagerTest extends TestCase
     /** @var Database[]|MockObject[] */
     private $documentDatabases = [];
 
-    /** @var DocumentManagerMock */
-    private $dm;
-
     /** @var SchemaManager */
     private $schemaManager;
 
-    public function setUp()
+    public function setUp() : void
     {
-        $this->dm = $this->getMockDocumentManager();
+        parent::setUp();
 
-        $cmf = new ClassMetadataFactory();
-        $cmf->setConfiguration($this->dm->getConfiguration());
-        $cmf->setDocumentManager($this->dm);
+        $client = $this->createMock(Client::class);
+        $client->method('getTypeMap')->willReturn(DocumentManager::CLIENT_TYPEMAP);
+        $this->dm = DocumentManager::create($client, $this->dm->getConfiguration(), $this->createMock(EventManager::class));
 
-        $map = [];
-
-        foreach ($cmf->getAllMetadata() as $cm) {
+        /** @var ClassMetadata $cm */
+        foreach ($this->dm->getMetadataFactory()->getAllMetadata() as $cm) {
+            if ($cm->isMappedSuperclass || $cm->isEmbeddedDocument || $cm->isQueryResultDocument) {
+                continue;
+            }
             if ($cm->isFile) {
-                $this->documentBuckets[$cm->name] = $this->getMockBucket();
+                $this->documentBuckets[$cm->getBucketName()] = $this->getMockBucket();
             } else {
-                $this->documentCollections[$cm->name] = $this->getMockCollection();
+                $this->documentCollections[$cm->getCollection()] = $this->getMockCollection();
             }
 
-            $this->documentDatabases[$cm->name] = $this->getMockDatabase();
-            $this->classMetadatas[$cm->name]    = $cm;
+            $db = $this->getDatabaseName($cm);
+            if (isset($this->documentDatabases[$db])) {
+                continue;
+            }
+
+            $this->documentDatabases[$db] = $this->getMockDatabase();
         }
 
-        $this->dm->unitOfWork          = $this->getMockUnitOfWork();
-        $this->dm->metadataFactory     = $cmf;
-        $this->dm->documentCollections = $this->documentCollections;
-        $this->dm->documentBuckets     = $this->documentBuckets;
-        $this->dm->documentDatabases   = $this->documentDatabases;
+        $client->method('selectDatabase')->willReturnCallback(function (string $db) {
+            return $this->documentDatabases[$db];
+        });
 
-        $this->schemaManager     = new SchemaManager($this->dm, $cmf);
-        $this->dm->schemaManager = $this->schemaManager;
+        $this->schemaManager = $this->dm->getSchemaManager();
+    }
+
+    public function tearDown() : void
+    {
+        // do not call parent, client here is mocked and there's nothing to tidy up in the database
     }
 
     public static function getWriteOptions() : array
@@ -145,15 +122,39 @@ class SchemaManagerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider getWriteOptions
-     */
-    public function testEnsureIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
+    public static function getIndexCreationWriteOptions() : array
     {
-        foreach ($this->documentCollections as $class => $collection) {
-            if (in_array($class, $this->indexedClasses)) {
+        $originalOptionsWithBackground = array_map(static function (array $arguments) : array {
+            $arguments['expectedWriteOptions']['background'] = false;
+
+            return $arguments;
+        }, self::getWriteOptions());
+
+        return $originalOptionsWithBackground + [
+            'backgroundOptionSet' => [
+                'expectedWriteOptions' => ['background' => true],
+                'maxTimeMs' => null,
+                'writeConcern' => null,
+                'background' => true,
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider getIndexCreationWriteOptions
+     */
+    public function testEnsureIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern, bool $background = false)
+    {
+        $indexedCollections = array_map(
+            function (string $fqcn) {
+                return $this->dm->getClassMetadata($fqcn)->getCollection();
+            },
+            $this->indexedClasses
+        );
+        foreach ($this->documentCollections as $collectionName => $collection) {
+            if (in_array($collectionName, $indexedCollections)) {
                 $collection
-                    ->expects($this->once())
+                    ->expects($this->atLeastOnce())
                     ->method('createIndex')
                     ->with($this->anything(), new ArraySubset($expectedWriteOptions));
             } else {
@@ -167,7 +168,7 @@ class SchemaManagerTest extends TestCase
                 ->method('listIndexes')
                 ->willReturn([]);
             $bucket->getFilesCollection()
-                ->expects($this->once())
+                ->expects($this->atLeastOnce())
                 ->method('createIndex')
                 ->with(['filename' => 1, 'uploadDate' => 1], new ArraySubset($expectedWriteOptions));
 
@@ -176,21 +177,22 @@ class SchemaManagerTest extends TestCase
                 ->method('listIndexes')
                 ->willReturn([]);
             $bucket->getChunksCollection()
-                ->expects($this->once())
+                ->expects($this->atLeastOnce())
                 ->method('createIndex')
                 ->with(['files_id' => 1, 'n' => 1], new ArraySubset(['unique' => true] + $expectedWriteOptions));
         }
 
-        $this->schemaManager->ensureIndexes($maxTimeMs, $writeConcern);
+        $this->schemaManager->ensureIndexes($maxTimeMs, $writeConcern, $background);
     }
 
     /**
-     * @dataProvider getWriteOptions
+     * @dataProvider getIndexCreationWriteOptions
      */
-    public function testEnsureDocumentIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
+    public function testEnsureDocumentIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern, bool $background = false)
     {
-        foreach ($this->documentCollections as $class => $collection) {
-            if ($class === CmsArticle::class) {
+        $cmsArticleCollectionName = $this->dm->getClassMetadata(CmsArticle::class)->getCollection();
+        foreach ($this->documentCollections as $collectionName => $collection) {
+            if ($collectionName === $cmsArticleCollectionName) {
                 $collection
                     ->expects($this->once())
                     ->method('createIndex')
@@ -200,20 +202,21 @@ class SchemaManagerTest extends TestCase
             }
         }
 
-        $this->schemaManager->ensureDocumentIndexes(CmsArticle::class, $maxTimeMs, $writeConcern);
+        $this->schemaManager->ensureDocumentIndexes(CmsArticle::class, $maxTimeMs, $writeConcern, $background);
     }
 
     /**
-     * @dataProvider getWriteOptions
+     * @dataProvider getIndexCreationWriteOptions
      */
-    public function testEnsureDocumentIndexesForGridFSFile(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
+    public function testEnsureDocumentIndexesForGridFSFile(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern, bool $background = false)
     {
         foreach ($this->documentCollections as $class => $collection) {
             $collection->expects($this->never())->method('createIndex');
         }
 
+        $fileBucket = $this->dm->getClassMetadata(File::class)->getBucketName();
         foreach ($this->documentBuckets as $class => $bucket) {
-            if ($class === File::class) {
+            if ($class === $fileBucket) {
                 $bucket->getFilesCollection()
                     ->expects($this->any())
                     ->method('listIndexes')
@@ -237,21 +240,22 @@ class SchemaManagerTest extends TestCase
             }
         }
 
-        $this->schemaManager->ensureDocumentIndexes(File::class, $maxTimeMs, $writeConcern);
+        $this->schemaManager->ensureDocumentIndexes(File::class, $maxTimeMs, $writeConcern, $background);
     }
 
     /**
-     * @dataProvider getWriteOptions
+     * @dataProvider getIndexCreationWriteOptions
      */
-    public function testEnsureDocumentIndexesWithTwoLevelInheritance(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
+    public function testEnsureDocumentIndexesWithTwoLevelInheritance(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern, bool $background = false)
     {
-        $collection = $this->documentCollections[CmsProduct::class];
+        $collectionName = $this->dm->getClassMetadata(CmsProduct::class)->getCollection();
+        $collection     = $this->documentCollections[$collectionName];
         $collection
             ->expects($this->once())
             ->method('createIndex')
             ->with($this->anything(), new ArraySubset($expectedWriteOptions));
 
-        $this->schemaManager->ensureDocumentIndexes(CmsProduct::class, $maxTimeMs, $writeConcern);
+        $this->schemaManager->ensureDocumentIndexes(CmsProduct::class, $maxTimeMs, $writeConcern, $background);
     }
 
     /**
@@ -259,7 +263,8 @@ class SchemaManagerTest extends TestCase
      */
     public function testUpdateDocumentIndexesShouldCreateMappedIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        $collection = $this->documentCollections[CmsArticle::class];
+        $collectionName = $this->dm->getClassMetadata(CmsArticle::class)->getCollection();
+        $collection     = $this->documentCollections[$collectionName];
         $collection
             ->expects($this->once())
             ->method('listIndexes')
@@ -281,8 +286,9 @@ class SchemaManagerTest extends TestCase
      */
     public function testUpdateDocumentIndexesShouldDeleteUnmappedIndexesBeforeCreatingMappedIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        $collection = $this->documentCollections[CmsArticle::class];
-        $indexes    = [
+        $collectionName = $this->dm->getClassMetadata(CmsArticle::class)->getCollection();
+        $collection     = $this->documentCollections[$collectionName];
+        $indexes        = [
             [
                 'v' => 1,
                 'key' => ['topic' => -1],
@@ -311,15 +317,11 @@ class SchemaManagerTest extends TestCase
      */
     public function testDeleteIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        foreach ($this->documentCollections as $class => $collection) {
-            if (in_array($class, $this->indexedClasses)) {
-                $collection
-                    ->expects($this->once())
-                    ->method('dropIndexes')
-                    ->with(new ArraySubset($expectedWriteOptions));
-            } elseif (in_array($class, $this->someMappedSuperclassAndEmbeddedClasses)) {
-                $collection->expects($this->never())->method('dropIndexes');
-            }
+        foreach ($this->documentCollections as $collection) {
+            $collection
+                ->expects($this->atLeastOnce())
+                ->method('dropIndexes')
+                ->with(new ArraySubset($expectedWriteOptions));
         }
 
         $this->schemaManager->deleteIndexes($maxTimeMs, $writeConcern);
@@ -330,8 +332,9 @@ class SchemaManagerTest extends TestCase
      */
     public function testDeleteDocumentIndexes(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        foreach ($this->documentCollections as $class => $collection) {
-            if ($class === CmsArticle::class) {
+        $cmsArticleCollectionName = $this->dm->getClassMetadata(CmsArticle::class)->getCollection();
+        foreach ($this->documentCollections as $collectionName => $collection) {
+            if ($collectionName === $cmsArticleCollectionName) {
                 $collection
                     ->expects($this->once())
                     ->method('dropIndexes')
@@ -349,7 +352,7 @@ class SchemaManagerTest extends TestCase
      */
     public function testCreateDocumentCollection(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        $cm                   = $this->classMetadatas[CmsArticle::class];
+        $cm                   = $this->dm->getClassMetadata(CmsArticle::class);
         $cm->collectionCapped = true;
         $cm->collectionSize   = 1048576;
         $cm->collectionMax    = 32;
@@ -360,7 +363,7 @@ class SchemaManagerTest extends TestCase
             'max' => 32,
         ];
 
-        $database = $this->documentDatabases[CmsArticle::class];
+        $database = $this->documentDatabases[$this->getDatabaseName($cm)];
         $database->expects($this->once())
             ->method('createCollection')
             ->with(
@@ -376,7 +379,7 @@ class SchemaManagerTest extends TestCase
      */
     public function testCreateDocumentCollectionForFile(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        $database = $this->documentDatabases[File::class];
+        $database = $this->documentDatabases[$this->getDatabaseName($this->dm->getClassMetadata(File::class))];
         $database
             ->expects($this->at(0))
             ->method('createCollection')
@@ -394,14 +397,10 @@ class SchemaManagerTest extends TestCase
     public function testCreateCollections(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
         foreach ($this->documentDatabases as $class => $database) {
-            if (in_array($class, $this->indexedClasses + $this->someNonIndexedClasses)) {
-                $database
-                    ->expects($this->once())
-                    ->method('createCollection')
-                    ->with($this->anything(), new ArraySubset($expectedWriteOptions));
-            } elseif (in_array($class, $this->someMappedSuperclassAndEmbeddedClasses)) {
-                $database->expects($this->never())->method('createCollection');
-            }
+            $database
+                ->expects($this->atLeastOnce())
+                ->method('createCollection')
+                ->with($this->anything(), new ArraySubset($expectedWriteOptions));
         }
 
         $this->schemaManager->createCollections($maxTimeMs, $writeConcern);
@@ -412,14 +411,10 @@ class SchemaManagerTest extends TestCase
      */
     public function testDropCollections(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        foreach ($this->documentCollections as $class => $collection) {
-            if (in_array($class, $this->indexedClasses + $this->someNonIndexedClasses)) {
-                $collection->expects($this->once())
-                    ->method('drop')
-                    ->with(new ArraySubset($expectedWriteOptions));
-            } elseif (in_array($class, $this->someMappedSuperclassAndEmbeddedClasses)) {
-                $collection->expects($this->never())->method('drop');
-            }
+        foreach ($this->documentCollections as $collection) {
+            $collection->expects($this->atLeastOnce())
+                ->method('drop')
+                ->with(new ArraySubset($expectedWriteOptions));
         }
 
         $this->schemaManager->dropCollections($maxTimeMs, $writeConcern);
@@ -430,8 +425,9 @@ class SchemaManagerTest extends TestCase
      */
     public function testDropDocumentCollection(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        foreach ($this->documentCollections as $class => $collection) {
-            if ($class === CmsArticle::class) {
+        $cmsArticleCollectionName = $this->dm->getClassMetadata(CmsArticle::class)->getCollection();
+        foreach ($this->documentCollections as $collectionName => $collection) {
+            if ($collectionName === $cmsArticleCollectionName) {
                 $collection->expects($this->once())
                     ->method('drop')
                     ->with(new ArraySubset($expectedWriteOptions));
@@ -448,12 +444,13 @@ class SchemaManagerTest extends TestCase
      */
     public function testDropDocumentCollectionForGridFSFile(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        foreach ($this->documentCollections as $class => $collection) {
+        foreach ($this->documentCollections as $collection) {
             $collection->expects($this->never())->method('drop');
         }
 
-        foreach ($this->documentBuckets as $class => $bucket) {
-            if ($class === File::class) {
+        $fileBucketName = $this->dm->getClassMetadata(File::class)->getBucketName();
+        foreach ($this->documentBuckets as $bucketName => $bucket) {
+            if ($bucketName === $fileBucketName) {
                 $bucket->getFilesCollection()
                     ->expects($this->once())
                     ->method('drop')
@@ -476,8 +473,9 @@ class SchemaManagerTest extends TestCase
      */
     public function testDropDocumentDatabase(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        foreach ($this->documentDatabases as $class => $database) {
-            if ($class === CmsArticle::class) {
+        $cmsArticleDatabaseName = $this->getDatabaseName($this->dm->getClassMetadata(CmsArticle::class));
+        foreach ($this->documentDatabases as $databaseName => $database) {
+            if ($databaseName === $cmsArticleDatabaseName) {
                 $database
                     ->expects($this->once())
                     ->method('drop')
@@ -487,7 +485,7 @@ class SchemaManagerTest extends TestCase
             }
         }
 
-        $this->dm->getSchemaManager()->dropDocumentDatabase(CmsArticle::class, $maxTimeMs, $writeConcern);
+        $this->schemaManager->dropDocumentDatabase(CmsArticle::class, $maxTimeMs, $writeConcern);
     }
 
     /**
@@ -495,15 +493,11 @@ class SchemaManagerTest extends TestCase
      */
     public function testDropDatabases(array $expectedWriteOptions, ?int $maxTimeMs, ?WriteConcern $writeConcern)
     {
-        foreach ($this->documentDatabases as $class => $database) {
-            if (in_array($class, $this->indexedClasses + $this->someNonIndexedClasses)) {
-                $database
-                    ->expects($this->once())
-                    ->method('drop')
-                    ->with(new ArraySubset($expectedWriteOptions));
-            } elseif (in_array($class, $this->someMappedSuperclassAndEmbeddedClasses)) {
-                $database->expects($this->never())->method('drop');
-            }
+        foreach ($this->documentDatabases as $database) {
+            $database
+                ->expects($this->atLeastOnce())
+                ->method('drop')
+                ->with(new ArraySubset($expectedWriteOptions));
         }
 
         $this->schemaManager->dropDatabases($maxTimeMs, $writeConcern);
@@ -525,7 +519,7 @@ class SchemaManagerTest extends TestCase
         $mongoIndex    += $defaultMongoIndex;
         $documentIndex += $defaultDocumentIndex;
 
-        $this->assertSame($expected, $this->schemaManager->isMongoIndexEquivalentToDocumentIndex($mongoIndex, $documentIndex));
+        $this->assertSame($expected, $this->schemaManager->isMongoIndexEquivalentToDocumentIndex(new IndexInfo($mongoIndex), $documentIndex));
     }
 
     public function dataIsMongoIndexEquivalentToDocumentIndex()
@@ -673,6 +667,12 @@ class SchemaManagerTest extends TestCase
                 'mongoIndex' => [],
                 'documentIndex' => ['keys' => ['foo' => 'text', 'bar' => 'text']],
             ],
+            // geoHaystack index options
+            'geoHaystackOptionsDifferent' => [
+                'expected' => false,
+                'mongoIndex' => [],
+                'documentIndex' => ['options' => ['bucketSize' => 16]],
+            ],
         ];
     }
 
@@ -696,7 +696,7 @@ class SchemaManagerTest extends TestCase
         $mongoIndex    += $defaultMongoIndex;
         $documentIndex += $defaultDocumentIndex;
 
-        $this->assertSame($expected, $this->schemaManager->isMongoIndexEquivalentToDocumentIndex($mongoIndex, $documentIndex));
+        $this->assertSame($expected, $this->schemaManager->isMongoIndexEquivalentToDocumentIndex(new IndexInfo($mongoIndex), $documentIndex));
     }
 
     public function dataIsMongoTextIndexEquivalentToDocumentIndex()
@@ -815,6 +815,11 @@ class SchemaManagerTest extends TestCase
         ];
     }
 
+    private function getDatabaseName(ClassMetadata $cm) : string
+    {
+        return $cm->getDatabase() ?: $this->dm->getConfiguration()->getDefaultDB() ?: 'doctrine';
+    }
+
     /** @return Bucket|MockObject */
     private function getMockBucket()
     {
@@ -825,6 +830,7 @@ class SchemaManagerTest extends TestCase
         return $mock;
     }
 
+    /** @return Collection|MockObject */
     private function getMockCollection()
     {
         return $this->createMock(Collection::class);
@@ -833,39 +839,14 @@ class SchemaManagerTest extends TestCase
     /** @return Database|MockObject */
     private function getMockDatabase()
     {
-        return $this->createMock(Database::class);
-    }
+        $db = $this->createMock(Database::class);
+        $db->method('selectCollection')->willReturnCallback(function (string $collection) {
+            return $this->documentCollections[$collection];
+        });
+        $db->method('selectGridFSBucket')->willReturnCallback(function (array $options) {
+            return $this->documentBuckets[$options['bucketName']];
+        });
 
-    private function getMockDocumentManager() : DocumentManagerMock
-    {
-        $config = new Configuration();
-        $config->setMetadataDriverImpl(AnnotationDriver::create(__DIR__ . '/../../../../Documents'));
-
-        $em = $this->createMock(EventManager::class);
-
-        $dm                    = new DocumentManagerMock();
-        $dm->eventManager      = $em;
-        $dm->config            = $config;
-        $dm->client            = $this->createMock(Client::class);
-        $dm->classNameResolver = new ClassNameResolver($config);
-
-        return $dm;
-    }
-
-    private function getMockUnitOfWork()
-    {
-        $documentPersister = $this->createMock(DocumentPersister::class);
-
-        $documentPersister->expects($this->any())
-            ->method('prepareFieldName')
-            ->will($this->returnArgument(0));
-
-        $uow = $this->createMock(UnitOfWork::class);
-
-        $uow->expects($this->any())
-            ->method('getDocumentPersister')
-            ->will($this->returnValue($documentPersister));
-
-        return $uow;
+        return $db;
     }
 }

@@ -12,7 +12,7 @@ use function sprintf;
 /**
  * Class that holds event arguments for a preUpdate event.
  */
-class PreUpdateEventArgs extends LifecycleEventArgs
+final class PreUpdateEventArgs extends LifecycleEventArgs
 {
     /** @var array */
     private $documentChangeSet;

@@ -11,7 +11,7 @@ use Doctrine\ODM\MongoDB\PersistentCollection\PersistentCollectionTrait;
 /**
  * A PersistentCollection represents a collection of elements that have persistent state.
  */
-class PersistentCollection implements PersistentCollectionInterface
+final class PersistentCollection implements PersistentCollectionInterface
 {
     use PersistentCollectionTrait;
 

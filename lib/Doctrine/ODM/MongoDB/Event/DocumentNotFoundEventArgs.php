@@ -9,7 +9,7 @@ use Doctrine\ODM\MongoDB\DocumentManager;
 /**
  * Provides event arguments for the documentNotFound event.
  */
-class DocumentNotFoundEventArgs extends LifecycleEventArgs
+final class DocumentNotFoundEventArgs extends LifecycleEventArgs
 {
     /** @var mixed */
     private $identifier;

@@ -12,7 +12,7 @@ use function in_array;
  *
  * @internal
  */
-class CollectionHelper
+final class CollectionHelper
 {
     public const DEFAULT_STRATEGY = ClassMetadata::STORAGE_STRATEGY_PUSH_ALL;
 

@@ -16,10 +16,10 @@ use InvalidArgumentException;
 use IteratorAggregate;
 use MongoDB\Collection;
 use MongoDB\DeleteResult;
-use MongoDB\Driver\Cursor;
 use MongoDB\InsertOneResult;
 use MongoDB\Operation\FindOneAndUpdate;
 use MongoDB\UpdateResult;
+use Traversable;
 use UnexpectedValueException;
 use function array_combine;
 use function array_filter;
@@ -32,12 +32,15 @@ use function array_values;
 use function assert;
 use function is_array;
 use function is_callable;
+use function is_string;
+use function key;
+use function reset;
 
 /**
  * ODM Query wraps the raw Doctrine MongoDB queries to add additional functionality
  * and to hydrate the raw arrays of data to Doctrine document objects.
  */
-class Query implements IteratorAggregate
+final class Query implements IteratorAggregate
 {
     public const TYPE_FIND            = 1;
     public const TYPE_FIND_AND_UPDATE = 2;
@@ -45,15 +48,8 @@ class Query implements IteratorAggregate
     public const TYPE_INSERT          = 4;
     public const TYPE_UPDATE          = 5;
     public const TYPE_REMOVE          = 6;
-    public const TYPE_GROUP           = 7;
-    public const TYPE_MAP_REDUCE      = 8;
     public const TYPE_DISTINCT        = 9;
     public const TYPE_COUNT           = 11;
-
-    /**
-     * @deprecated 1.1 Will be removed for 2.0
-     */
-    public const TYPE_GEO_LOCATION = 10;
 
     public const HINT_REFRESH = 1;
     // 2 was used for HINT_SLAVE_OKAY, which was removed in 2.0
@@ -130,8 +126,6 @@ class Query implements IteratorAggregate
             case self::TYPE_INSERT:
             case self::TYPE_UPDATE:
             case self::TYPE_REMOVE:
-            case self::TYPE_GROUP:
-            case self::TYPE_MAP_REDUCE:
             case self::TYPE_DISTINCT:
             case self::TYPE_COUNT:
                 break;
@@ -244,8 +238,6 @@ class Query implements IteratorAggregate
     {
         switch ($this->query['type']) {
             case self::TYPE_FIND:
-            case self::TYPE_GROUP:
-            case self::TYPE_MAP_REDUCE:
             case self::TYPE_DISTINCT:
                 break;
 
@@ -281,6 +273,7 @@ class Query implements IteratorAggregate
     {
         $clonedQuery                 = clone $this;
         $clonedQuery->query['limit'] = 1;
+
         return $clonedQuery->getIterator()->current() ?: null;
     }
 
@@ -346,7 +339,15 @@ class Query implements IteratorAggregate
         );
     }
 
-    private function makeIterator(Cursor $cursor) : Iterator
+    /**
+     * Decorate the cursor with caching, hydration, and priming behavior.
+     *
+     * Note: while this method could strictly take a MongoDB\Driver\Cursor, we
+     * accept Traversable for testing purposes since Cursor cannot be mocked.
+     * HydratingIterator and CachingIterator both expect a Traversable so this
+     * should not have any adverse effects.
+     */
+    private function makeIterator(Traversable $cursor) : Iterator
     {
         if ($this->hydrate) {
             $cursor = new HydratingIterator($cursor, $this->dm->getUnitOfWork(), $this->class, $this->unitOfWorkHints);
@@ -400,7 +401,7 @@ class Query implements IteratorAggregate
      *
      * @return Iterator|UpdateResult|InsertOneResult|DeleteResult|array|object|int|null
      */
-    public function runQuery()
+    private function runQuery()
     {
         $options = $this->options;
 
@@ -411,22 +412,22 @@ class Query implements IteratorAggregate
 
                 $cursor = $this->collection->find(
                     $this->query['query'],
-                    $queryOptions
+                    array_merge($options, $queryOptions)
                 );
 
                 return $this->makeIterator($cursor);
-
             case self::TYPE_FIND_AND_UPDATE:
                 $queryOptions                   = $this->getQueryOptions('select', 'sort', 'upsert');
                 $queryOptions                   = $this->renameQueryOptions($queryOptions, ['select' => 'projection']);
                 $queryOptions['returnDocument'] = $this->query['new'] ?? false ? FindOneAndUpdate::RETURN_DOCUMENT_AFTER : FindOneAndUpdate::RETURN_DOCUMENT_BEFORE;
 
-                return $this->collection->findOneAndUpdate(
+                $operation = $this->isFirstKeyUpdateOperator() ? 'findOneAndUpdate' : 'findOneAndReplace';
+
+                return $this->collection->{$operation}(
                     $this->query['query'],
                     $this->query['newObj'],
                     array_merge($options, $queryOptions)
                 );
-
             case self::TYPE_FIND_AND_REMOVE:
                 $queryOptions = $this->getQueryOptions('select', 'sort');
                 $queryOptions = $this->renameQueryOptions($queryOptions, ['select' => 'projection']);
@@ -435,12 +436,22 @@ class Query implements IteratorAggregate
                     $this->query['query'],
                     array_merge($options, $queryOptions)
                 );
-
             case self::TYPE_INSERT:
                 return $this->collection->insertOne($this->query['newObj'], $options);
-
             case self::TYPE_UPDATE:
-                if ($this->query['multiple'] ?? false) {
+                $multiple = $this->query['multiple'] ?? false;
+
+                if ($this->isFirstKeyUpdateOperator()) {
+                    $operation = 'updateOne';
+                } else {
+                    if ($multiple) {
+                        throw new InvalidArgumentException('Combining the "multiple" option without using an update operator as first operation in a query is not supported.');
+                    }
+
+                    $operation = 'replaceOne';
+                }
+
+                if ($multiple) {
                     return $this->collection->updateMany(
                         $this->query['query'],
                         $this->query['newObj'],
@@ -448,15 +459,13 @@ class Query implements IteratorAggregate
                     );
                 }
 
-                return $this->collection->updateOne(
+                return $this->collection->{$operation}(
                     $this->query['query'],
                     $this->query['newObj'],
                     array_merge($options, $this->getQueryOptions('upsert'))
                 );
-
             case self::TYPE_REMOVE:
                 return $this->collection->deleteMany($this->query['query'], $options);
-
             case self::TYPE_DISTINCT:
                 $collection = $this->collection;
                 $query      = $this->query;
@@ -466,7 +475,6 @@ class Query implements IteratorAggregate
                     $query['query'],
                     array_merge($options, $this->getQueryOptions('readPreference'))
                 );
-
             case self::TYPE_COUNT:
                 $collection = $this->collection;
                 $query      = $this->query;
@@ -475,9 +483,16 @@ class Query implements IteratorAggregate
                     $query['query'],
                     array_merge($options, $this->getQueryOptions('hint', 'limit', 'skip', 'readPreference'))
                 );
-
             default:
                 throw new InvalidArgumentException('Invalid query type: ' . $this->query['type']);
         }
+    }
+
+    private function isFirstKeyUpdateOperator() : bool
+    {
+        reset($this->query['newObj']);
+        $firstKey = key($this->query['newObj']);
+
+        return is_string($firstKey) && $firstKey[0] === '$';
     }
 }

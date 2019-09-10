@@ -14,7 +14,7 @@ use function sprintf;
 /**
  * Class for all exceptions related to the Doctrine MongoDB ODM
  */
-class MappingException extends BaseMappingException
+final class MappingException extends BaseMappingException
 {
     public static function typeExists(string $name) : self
     {

@@ -8,7 +8,6 @@ use DateTime;
 use Doctrine\ODM\MongoDB\Mapping\Annotations as ODM;
 use Doctrine\ODM\MongoDB\Query\Builder;
 use Doctrine\ODM\MongoDB\Query\Expr;
-use Doctrine\ODM\MongoDB\Query\Query;
 use Doctrine\ODM\MongoDB\Tests\BaseTest;
 use Doctrine\ODM\MongoDB\Types\Type;
 use Documents\Feature;
@@ -40,13 +39,25 @@ class BuilderTest extends BaseTest
             ->field('featureFull')->references($f)
             ->getQuery()->debug();
 
-        $this->assertEquals([ 'featureFull.$id' => new ObjectId($f->id) ], $q1['query']);
+        $this->assertEquals(
+            [
+                'featureFull.$id' => new ObjectId($f->id),
+                'type' => ['$in' => ['ca', 'cb', 'cc']],
+            ],
+            $q1['query']
+        );
 
         $q2 = $this->dm->createQueryBuilder(ParentClass::class)
             ->field('featureSimple')->references($f)
             ->getQuery()->debug();
 
-        $this->assertEquals([ 'featureSimple' => new ObjectId($f->id) ], $q2['query']);
+        $this->assertEquals(
+            [
+                'featureSimple' => new ObjectId($f->id),
+                'type' => ['$in' => ['ca', 'cb', 'cc']],
+            ],
+            $q2['query']
+        );
 
         $q3 = $this->dm->createQueryBuilder(ParentClass::class)
             ->field('featurePartial')->references($f)
@@ -56,6 +67,7 @@ class BuilderTest extends BaseTest
             [
                 'featurePartial.$id' => new ObjectId($f->id),
                 'featurePartial.$ref' => 'Feature',
+                'type' => ['$in' => ['ca', 'cb', 'cc']],
             ],
             $q3['query']
         );
@@ -98,13 +110,27 @@ class BuilderTest extends BaseTest
             ->field('featureFullMany')->includesReferenceTo($f)
             ->getQuery()->debug();
 
-        $this->assertEquals([ 'featureFullMany' => [ '$elemMatch' => [ '$id' => new ObjectId($f->id) ] ] ], $q1['query']);
+        $this->assertEquals(
+            [
+                'featureFullMany' => [
+                    '$elemMatch' => ['$id' => new ObjectId($f->id)],
+                ],
+                'type' => ['$in' => ['ca', 'cb', 'cc']],
+            ],
+            $q1['query']
+        );
 
         $q2 = $this->dm->createQueryBuilder(ParentClass::class)
             ->field('featureSimpleMany')->includesReferenceTo($f)
             ->getQuery()->debug();
 
-        $this->assertEquals([ 'featureSimpleMany' => new ObjectId($f->id) ], $q2['query']);
+        $this->assertEquals(
+            [
+                'featureSimpleMany' => new ObjectId($f->id),
+                'type' => ['$in' => ['ca', 'cb', 'cc']],
+            ],
+            $q2['query']
+        );
 
         $q3 = $this->dm->createQueryBuilder(ParentClass::class)
             ->field('featurePartialMany')->includesReferenceTo($f)
@@ -118,6 +144,7 @@ class BuilderTest extends BaseTest
                         '$ref' => 'Feature',
                     ],
                 ],
+                'type' => ['$in' => ['ca', 'cb', 'cc']],
             ],
             $q3['query']
         );
@@ -197,101 +224,6 @@ class BuilderTest extends BaseTest
         yield [ChildA::class, 'featureFull'];
         yield [ChildB::class, 'featureSimple'];
         yield [ChildC::class, 'featurePartial'];
-    }
-
-    public function testMapReduceQueryWithSingleMethod()
-    {
-        $map = 'function() {
-            for(i = 0; i <= this.options.length; i++) {
-                emit(this.name, { count: 1 });
-            }
-        }';
-
-        $reduce = 'function(product, values) {
-            var total = 0
-            values.forEach(function(value){
-                total+= value.count;
-            });
-            return {
-                product: product,
-                options: total,
-                test: values
-            };
-        }';
-
-        $finalize = 'function (key, value) { return value; }';
-
-        $out = ['inline' => true];
-
-        $qb = $this->getTestQueryBuilder()
-            ->mapReduce($map, $reduce, $out, ['finalize' => $finalize]);
-
-        $expectedMapReduce = [
-            'map' => $map,
-            'reduce' => $reduce,
-            'out' => ['inline' => true],
-            'options' => ['finalize' => $finalize],
-        ];
-
-        $this->assertEquals(Query::TYPE_MAP_REDUCE, $qb->getType());
-        $this->assertEquals($expectedMapReduce, $qb->debug('mapReduce'));
-    }
-
-    public function testMapReduceQueryWithMultipleMethodsAndQueryArray()
-    {
-        $map = 'function() {
-            for(i = 0; i <= this.options.length; i++) {
-                emit(this.name, { count: 1 });
-            }
-        }';
-
-        $reduce = 'function(product, values) {
-            var total = 0
-            values.forEach(function(value){
-                total+= value.count;
-            });
-            return {
-                product: product,
-                options: total,
-                test: values
-            };
-        }';
-
-        $finalize = 'function (key, value) { return value; }';
-
-        $qb = $this->getTestQueryBuilder()
-            ->map($map)
-            ->reduce($reduce)
-            ->finalize($finalize)
-            ->field('username')->equals('jwage');
-
-        $expectedQueryArray = ['username' => 'jwage'];
-        $expectedMapReduce  = [
-            'map' => $map,
-            'reduce' => $reduce,
-            'options' => ['finalize' => $finalize],
-            'out' => ['inline' => true],
-        ];
-
-        $this->assertEquals(Query::TYPE_MAP_REDUCE, $qb->getType());
-        $this->assertEquals($expectedQueryArray, $qb->getQueryArray());
-        $this->assertEquals($expectedMapReduce, $qb->debug('mapReduce'));
-    }
-
-    /**
-     * @expectedException BadMethodCallException
-     */
-    public function testFinalizeShouldThrowExceptionForUnsupportedQueryType()
-    {
-        $qb = $this->getTestQueryBuilder()->finalize('function() { }');
-    }
-
-    /**
-     * @expectedException BadMethodCallException
-     */
-    public function testReduceShouldThrowExceptionForUnsupportedQueryType()
-    {
-        $qb = $this->getTestQueryBuilder()->reduce('function() { }');
     }
 
     public function testThatOrAcceptsAnotherQuery()
@@ -594,24 +526,6 @@ class BuilderTest extends BaseTest
             'GeoJSON array' => [$json, $json, true],
             'GeoJSON object' => [$this->getMockPoint($json), $json, true],
         ];
-    }
-
-    /**
-     * @expectedException BadMethodCallException
-     */
-    public function testMapReduceOptionsRequiresMapReduceCommand()
-    {
-        $qb = $this->getTestQueryBuilder();
-        $qb->mapReduceOptions([]);
-    }
-
-    /**
-     * @expectedException BadMethodCallException
-     */
-    public function testOutRequiresMapReduceCommand()
-    {
-        $qb = $this->getTestQueryBuilder();
-        $qb->out('collection');
     }
 
     /**

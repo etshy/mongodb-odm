@@ -16,7 +16,7 @@ use RuntimeException;
  *
  * @internal
  */
-class QueryExpressionVisitor extends ExpressionVisitor
+final class QueryExpressionVisitor extends ExpressionVisitor
 {
     /**
      * Map Criteria API comparison operators to query builder methods
@@ -75,14 +75,12 @@ class QueryExpressionVisitor extends ExpressionVisitor
                 return $this->builder->expr()
                     ->field($comparison->getField())
                     ->{$method}($this->walkValue($comparison->getValue()));
-
             case Comparison::CONTAINS:
                 $value = $this->walkValue($comparison->getValue());
 
                 return $this->builder->expr()
                     ->field($comparison->getField())
                     ->equals(new Regex($value, ''));
-
             default:
                 throw new RuntimeException('Unknown comparison operator: ' . $comparison->getOperator());
         }
