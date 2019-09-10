@@ -749,53 +749,42 @@ class DocumentManager implements ObjectManager
     {
         $discriminatorField = null;
         $discriminatorValue = null;
-        $discriminatorData  = [];
+        $discriminatorMap   = null;
 
         if (isset($referenceMapping['discriminatorField'])) {
             $discriminatorField = $referenceMapping['discriminatorField'];
+
             if (isset($referenceMapping['discriminatorMap'])) {
-                $pos = array_search($class->name, $referenceMapping['discriminatorMap']);
+                $discriminatorMap = $referenceMapping['discriminatorMap'];
+            }
+        } else {
+            $discriminatorField = $class->discriminatorField;
+            $discriminatorValue = $class->discriminatorValue;
+            $discriminatorMap   = $class->discriminatorMap;
+        }
+
+        if ($discriminatorField === null) {
+            return [];
+        }
+
+        if ($discriminatorValue === null) {
+            if (! empty($discriminatorMap)) {
+                $pos = array_search($class->name, $discriminatorMap);
+
                 if ($pos !== false) {
                     $discriminatorValue = $pos;
                 }
             } else {
                 $discriminatorValue = $class->name;
             }
-        } else {
-            $discriminatorField = $class->discriminatorField;
-            $discriminatorValue = isset($class->discriminatorValue) ? $class->discriminatorValue : $class->name;
         }
 
-        if ($discriminatorField !== null) {
-            if ($discriminatorValue === null) {
-                @trigger_error(sprintf('Document class "%s" is unlisted in the discriminator map for reference "%s". This is deprecated and will throw an exception in 2.0.', $class->name, $referenceMapping['name']), E_USER_DEPRECATED);
-                $discriminatorValue = $class->name;
-            }
-
-            $discriminatorData = [$discriminatorField => $discriminatorValue];
-        } elseif (! isset($referenceMapping['targetDocument'])) {
-            $discriminatorField = $referenceMapping['discriminatorField'];
-
-            $discriminatorMap = null;
-            if (isset($referenceMapping['discriminatorMap'])) {
-                $discriminatorMap = $referenceMapping['discriminatorMap'];
-            }
-
-            if ($discriminatorMap === null) {
-                $discriminatorValue = $class->name;
-            } else {
-                $discriminatorValue = array_search($class->name, $discriminatorMap);
-
-                if ($discriminatorValue === false) {
-                    @trigger_error(sprintf('Document class "%s" is unlisted in the discriminator map for reference "%s". This is deprecated and will throw an exception in 2.0.', $class->name, $referenceMapping['name']), E_USER_DEPRECATED);
-                    $discriminatorValue = $class->name;
-                }
-            }
-
-            $discriminatorData = [$discriminatorField => $discriminatorValue];
+        if ($discriminatorValue === null) {
+            @trigger_error(sprintf('Document class "%s" is unlisted in the discriminator map for reference "%s". This is deprecated and will throw an exception in doctrine/mongodb-odm 2.0.', $class->name, $referenceMapping['name']), E_USER_DEPRECATED);
+            $discriminatorValue = $class->name;
         }
 
-        return $discriminatorData;
+        return [$discriminatorField => $discriminatorValue];
     }
 
     /**
@@ -810,7 +799,7 @@ class DocumentManager implements ObjectManager
      */
     public function createDBRef($document, array $referenceMapping = null)
     {
-        @trigger_error('The ' . __METHOD__ . ' method has been deprecated and will be removed in ODM 2.0. Use createReference() instead.', E_USER_DEPRECATED);
+        @trigger_error(sprintf('The "%s" method has been deprecated and will be removed in doctrine/mongodb-odm 2.0. Use createReference() instead.', __METHOD__), E_USER_DEPRECATED);
 
         if (!isset($referenceMapping['storeAs'])) {
             $referenceMapping['storeAs'] = ClassMetadata::REFERENCE_STORE_AS_DB_REF;

@@ -38,10 +38,12 @@ use Doctrine\ODM\MongoDB\Query\CriteriaMerger;
 use Doctrine\ODM\MongoDB\Query\Query;
 use Doctrine\ODM\MongoDB\Types\Type;
 use Doctrine\ODM\MongoDB\UnitOfWork;
+use const E_USER_DEPRECATED;
 
 /**
  * The DocumentPersister is responsible for persisting documents.
  *
+ * @final
  * @since       1.0
  */
 class DocumentPersister
@@ -136,6 +138,9 @@ class DocumentPersister
         ClassMetadata $class,
         CriteriaMerger $cm = null
     ) {
+        if (self::class !== static::class) {
+            @trigger_error(sprintf('The class "%s" extends "%s" which will be final in doctrine/mongodb-odm 2.0.', static::class, self::class), E_USER_DEPRECATED);
+        }
         $this->pb = $pb;
         $this->dm = $dm;
         $this->evm = $evm;
@@ -505,7 +510,7 @@ class DocumentPersister
         $cursor = $this->collection->find($criteria);
 
         if (null !== $sort) {
-            $cursor->sort($this->prepareSortOrProjection($sort));
+            $cursor->sort($this->prepareSort($sort));
         }
 
         $result = $cursor->getSingleResult();
@@ -917,16 +922,69 @@ class DocumentPersister
      *
      * @param array $fields
      * @return array
+     *
+     * @deprecated This method was deprecated in ODM 1.3 and will be dropped in 2.0. Use prepareSort or prepareProjection accordingly.
      */
     public function prepareSortOrProjection(array $fields)
     {
-        $preparedFields = array();
+        @trigger_error(
+            sprintf('The "%s" method was deprecated in doctrine/mongodb-odm 1.3 and will be dropped in 2.0. Use "prepareSort" or "prepareProjection" accordingly.', __METHOD__),
+            E_USER_DEPRECATED
+        );
+
+        return $this->prepareProjection($fields);
+    }
+
+    /**
+     * Prepare a projection array by converting keys, which are PHP property
+     * names, to MongoDB field names.
+     */
+    public function prepareProjection(array $fields)
+    {
+        $preparedFields = [];
 
         foreach ($fields as $key => $value) {
             $preparedFields[$this->prepareFieldName($key)] = $value;
         }
 
         return $preparedFields;
+    }
+
+    /**
+     * @param int|string $sort
+     *
+     * @return int|string|null
+     */
+    private function getSortDirection($sort)
+    {
+        switch (strtolower((string) $sort)) {
+            case 'desc':
+                return -1;
+
+            case 'asc':
+                return 1;
+        }
+
+        return $sort;
+    }
+
+    /**
+     * Prepare a sort specification array by converting keys to MongoDB field
+     * names and changing direction strings to int.
+     */
+    public function prepareSort(array $fields)
+    {
+        $sortFields = [];
+
+        foreach ($fields as $key => $value) {
+            if (is_array($value)) {
+                $sortFields[$this->prepareFieldName($key)] = $value;
+            } else {
+                $sortFields[$this->prepareFieldName($key)] = $this->getSortDirection($value);
+            }
+        }
+
+        return $sortFields;
     }
 
     /**

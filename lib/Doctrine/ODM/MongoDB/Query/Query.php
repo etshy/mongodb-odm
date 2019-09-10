@@ -28,6 +28,7 @@ use Doctrine\ODM\MongoDB\EagerCursor;
 use Doctrine\ODM\MongoDB\Mapping\ClassMetadata;
 use Doctrine\ODM\MongoDB\MongoDBException;
 use const E_USER_DEPRECATED;
+use function in_array;
 use function sprintf;
 use function trigger_error;
 
@@ -35,6 +36,7 @@ use function trigger_error;
  * ODM Query wraps the raw Doctrine MongoDB queries to add additional functionality
  * and to hydrate the raw arrays of data to Doctrine document objects.
  *
+ * @final
  * @since       1.0
  */
 class Query extends \Doctrine\MongoDB\Query\Query
@@ -43,8 +45,11 @@ class Query extends \Doctrine\MongoDB\Query\Query
     /** @deprecated */
     const HINT_SLAVE_OKAY = 2;
     const HINT_READ_PREFERENCE = 3;
+    /** @deprecated */
     const HINT_READ_PREFERENCE_TAGS = 4;
     const HINT_READ_ONLY = 5;
+    /** @deprecated */
+    const TYPE_GEO_NEAR = 10;
 
     /**
      * The DocumentManager instance.
@@ -106,10 +111,14 @@ class Query extends \Doctrine\MongoDB\Query\Query
      */
     public function __construct(DocumentManager $dm, ClassMetadata $class, Collection $collection, array $query = array(), array $options = array(), $hydrate = true, $refresh = false, array $primers = array(), $requireIndexes = null, $readOnly = false)
     {
+        if (self::class !== static::class) {
+            @trigger_error(sprintf('The class "%s" extends "%s" which will be final in doctrine/mongodb-odm 2.0.', static::class, self::class), E_USER_DEPRECATED);
+        }
+
         $primers = array_filter($primers);
 
         if (isset($query['eagerCursor'])) {
-            @trigger_error(sprintf('The "eagerCursor" option for "%s" is deprecated and will be removed in 2.0.', self::class), E_USER_DEPRECATED);
+            @trigger_error(sprintf('The "eagerCursor" option for "%s" is deprecated and will be removed in doctrine/mongodb-odm 2.0.', self::class), E_USER_DEPRECATED);
         }
 
         if ( ! empty($primers)) {
@@ -118,6 +127,28 @@ class Query extends \Doctrine\MongoDB\Query\Query
 
         if ( ! empty($query['eagerCursor'])) {
             $query['useIdentifierKeys'] = false;
+        }
+
+        if (in_array($query['type'], [self::TYPE_GEO_LOCATION, self::TYPE_GEO_NEAR, self::TYPE_GROUP, self::TYPE_MAP_REDUCE])) {
+            switch ($query['type']) {
+                case self::TYPE_GEO_LOCATION:
+                    $queryName = 'geoLocation';
+                    break;
+
+                case self::TYPE_GEO_NEAR:
+                    $queryName = 'geoNear';
+                    break;
+
+                case self::TYPE_GROUP:
+                    $queryName = 'group';
+                    break;
+
+                case self::TYPE_MAP_REDUCE:
+                    $queryName = 'mapReduce';
+                    break;
+            }
+
+            @trigger_error(sprintf('The "%s" query type is deprecated and will be removed in ODM doctrine/mongodb-odm 2.0.', $queryName), E_USER_DEPRECATED);
         }
 
         parent::__construct($collection, $query, $options);
@@ -206,7 +237,7 @@ class Query extends \Doctrine\MongoDB\Query\Query
     public function getFieldsInQuery()
     {
         @trigger_error(
-            sprintf('%s was deprecated in version 1.2 and will be removed altogether in 2.0.', __METHOD__),
+            sprintf('The "%s" method was deprecated in doctrine/mongodb-odm 1.2 and will be removed altogether in 2.0.', __METHOD__),
             E_USER_DEPRECATED
         );
         $query = isset($this->query['query']) ? $this->query['query'] : array();
@@ -226,7 +257,7 @@ class Query extends \Doctrine\MongoDB\Query\Query
     public function isIndexed()
     {
         @trigger_error(
-            sprintf('%s was deprecated in version 1.2 and will be removed altogether in 2.0.', __METHOD__),
+            sprintf('The "%s" method was deprecated in doctrine/mongodb-odm 1.2 and will be removed altogether in 2.0.', __METHOD__),
             E_USER_DEPRECATED
         );
         $fields = $this->getFieldsInQuery();
@@ -248,7 +279,7 @@ class Query extends \Doctrine\MongoDB\Query\Query
     public function getUnindexedFields()
     {
         @trigger_error(
-            sprintf('%s was deprecated in version 1.2 and will be removed altogether in 2.0.', __METHOD__),
+            sprintf('The "%s" method was deprecated in doctrine/mongodb-odm 1.2 and will be removed altogether in 2.0.', __METHOD__),
             E_USER_DEPRECATED
         );
         $unindexedFields = array();
@@ -331,6 +362,8 @@ class Query extends \Doctrine\MongoDB\Query\Query
      * @see \Doctrine\MongoDB\Cursor::prepareCursor()
      * @param BaseCursor $cursor
      * @return CursorInterface
+     *
+     * @deprecated This method will be removed in MongoDB ODM 2.0.
      */
     protected function prepareCursor(BaseCursor $cursor)
     {
@@ -359,5 +392,33 @@ class Query extends \Doctrine\MongoDB\Query\Query
     private function isIndexRequired()
     {
         return $this->requireIndexes !== null ? $this->requireIndexes : $this->class->requireIndexes;
+    }
+
+    /**
+     * @inheritdoc
+     * @deprecated Deprecated in version 1.3. Countable iterators will be removed in 2.0. Run separate queries instead
+     */
+    public function count($foundOnly = false)
+    {
+        @trigger_error(
+            sprintf('The %s method is deprecated since doctrine/mongodb-odm 1.3 and will be removed in 2.0. Please run separate count queries instead.', __METHOD__),
+            E_USER_DEPRECATED
+        );
+
+        return parent::count($foundOnly);
+    }
+
+    /**
+     * @inheritdoc
+     * @deprecated Deprecated in version 1.3. Use getIterator instead.
+     */
+    public function iterate()
+    {
+        @trigger_error(
+            sprintf('The %s method is deprecated since doctrine/mongodb-odm 1.3 and will be removed in 2.0. Please use "%s::getIterator()" instead.', __METHOD__, __CLASS__),
+            E_USER_DEPRECATED
+        );
+
+        return parent::iterate();
     }
 }

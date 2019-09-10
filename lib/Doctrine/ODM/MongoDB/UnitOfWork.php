@@ -43,6 +43,7 @@ use function trigger_error;
  * "object-level" transaction and for writing out changes to the database
  * in the correct order.
  *
+ * @final
  * @since       1.0
  */
 class UnitOfWork implements PropertyChangedListener
@@ -276,6 +277,9 @@ class UnitOfWork implements PropertyChangedListener
      */
     public function __construct(DocumentManager $dm, EventManager $evm, HydratorFactory $hydratorFactory)
     {
+        if (self::class !== static::class) {
+            @trigger_error(sprintf('The class "%s" extends "%s" which will be final in doctrine/mongodb-odm 2.0.', static::class, self::class), E_USER_DEPRECATED);
+        }
         $this->dm = $dm;
         $this->evm = $evm;
         $this->hydratorFactory = $hydratorFactory;
@@ -416,7 +420,7 @@ class UnitOfWork implements PropertyChangedListener
 
         $this->commitsInProgress++;
         if ($this->commitsInProgress > 1) {
-            @trigger_error('There is already a commit operation in progress. Calling flush in an event subscriber is deprecated and will be forbidden in 2.0.', E_USER_DEPRECATED);
+            @trigger_error('There is already a commit operation in progress. Calling flush in an event subscriber is deprecated and will be forbidden in doctrine/mongodb-odm 2.0.', E_USER_DEPRECATED);
         }
         try {
             if ($this->orphanRemovals) {
@@ -1371,7 +1375,7 @@ class UnitOfWork implements PropertyChangedListener
      */
     public function isScheduledForDirtyCheck($document)
     {
-        @trigger_error(sprintf('The "%s" method is deprecated and will be dropped in 2.0. Use isScheduledForSynchronization instead.', __METHOD__), E_USER_DEPRECATED);
+        @trigger_error(sprintf('The "%s" method is deprecated and will be dropped in doctrine/mongodb-odm 2.0. Use isScheduledForSynchronization instead.', __METHOD__), E_USER_DEPRECATED);
 
         return $this->isScheduledForSynchronization($document);
     }
@@ -1625,7 +1629,7 @@ class UnitOfWork implements PropertyChangedListener
      */
     public function scheduleForDirtyCheck($document)
     {
-        @trigger_error(sprintf('The "%s" method is deprecated and will be removed in 2.0. Use "scheduleForSynchronization" instead.', __METHOD__), E_USER_DEPRECATED);
+        @trigger_error(sprintf('The "%s" method is deprecated and will be removed in doctrine/mongodb-odm 2.0. Use "scheduleForSynchronization" instead.', __METHOD__), E_USER_DEPRECATED);
 
         $this->scheduleForSynchronization($document);
     }

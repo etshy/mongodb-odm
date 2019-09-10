@@ -25,6 +25,7 @@ use Doctrine\Common\Persistence\Mapping\ReflectionService;
 use Doctrine\ODM\MongoDB\Configuration;
 use Doctrine\ODM\MongoDB\DocumentManager;
 use Doctrine\ODM\MongoDB\Event\LoadClassMetadataEventArgs;
+use Doctrine\ODM\MongoDB\Event\OnClassMetadataNotFoundEventArgs;
 use Doctrine\ODM\MongoDB\Events;
 use Doctrine\ODM\MongoDB\Id\AbstractIdGenerator;
 use Doctrine\ODM\MongoDB\Id\AlnumGenerator;
@@ -37,6 +38,7 @@ use Doctrine\ODM\MongoDB\Id\UuidGenerator;
  * metadata mapping informations of a class which describes how a class should be mapped
  * to a document database.
  *
+ * @final
  * @since       1.0
  */
 class ClassMetadataFactory extends AbstractClassMetadataFactory
@@ -54,6 +56,13 @@ class ClassMetadataFactory extends AbstractClassMetadataFactory
 
     /** @var \Doctrine\Common\EventManager The event manager instance */
     private $evm;
+
+    public function __construct()
+    {
+        if (self::class !== static::class) {
+            @trigger_error(sprintf('The class "%s" extends "%s" which will be final in doctrine/mongodb-odm 2.0.', static::class, self::class), E_USER_DEPRECATED);
+        }
+    }
 
     /**
      * Sets the DocumentManager instance for this class.
@@ -84,6 +93,22 @@ class ClassMetadataFactory extends AbstractClassMetadataFactory
         $this->driver = $this->config->getMetadataDriverImpl();
         $this->evm = $this->dm->getEventManager();
         $this->initialized = true;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    protected function onNotFoundMetadata($className)
+    {
+        if (! $this->evm->hasListeners(Events::onClassMetadataNotFound)) {
+            return null;
+        }
+
+        $eventArgs = new OnClassMetadataNotFoundEventArgs($className, $this->dm);
+
+        $this->evm->dispatchEvent(Events::onClassMetadataNotFound, $eventArgs);
+
+        return $eventArgs->getFoundMetadata();
     }
 
     /**
